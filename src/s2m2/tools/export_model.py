@@ -7,6 +7,11 @@ def export_onnx(model, onnx_path, left_torch, right_torch):
     model = model.cpu().eval()
     left_torch, right_torch = left_torch.cpu(), right_torch.cpu()
     try:
+        # do_constant_folding=True is required so that shape-derived slice
+        # bounds (starts/ends/axes) are folded into constants; otherwise
+        # TensorRT's importSlice fails with "axes.allValuesKnown && this
+        # version of tensorrt does not support dynamic axes" even though
+        # dynamic_axes=None.
         torch.onnx.export(model,
                           (left_torch, right_torch),
                           onnx_path,
@@ -14,7 +19,7 @@ def export_onnx(model, onnx_path, left_torch, right_torch):
                           dynamo=True,
                           opset_version=18,
                           verbose=True,
-                          do_constant_folding=False,
+                          do_constant_folding=True,
                           input_names=['input_left', 'input_right'],
                           output_names=['output_disp', 'output_occ', 'output_conf'],
                           dynamic_axes=None)
@@ -32,7 +37,6 @@ def export_torchscript(model, torchscript_path, left_torch, right_torch):
     os.makedirs(os.path.dirname(torchscript_path), exist_ok=True)
     try:
         with torch.inference_mode():
-            with torch.cuda.amp.autocast(enabled=True, dtype=torch.float16):
                 exported_mod = torch.export.export(model, (left_torch, right_torch))
 
         torch.export.save(exported_mod, torchscript_path)

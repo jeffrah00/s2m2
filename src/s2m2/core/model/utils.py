@@ -7,13 +7,32 @@ def custom_sinc(x):
 
 
 def custom_unfold(x, kernel_size=3, padding=1):
-    B, C, H, W = x.shape
+    # Replicate-pad the input, then extract each of the kernel_size*kernel_size
+    # shifted windows and concatenate along the channel dim.
+    #
+    # The previous implementation sliced via ``x_pad[:, :, i:i+H, j:j+W]`` where
+    # H, W come from ``x.shape``.  With the dynamo ONNX exporter those shape
+    # values stay symbolic, so the emitted Slice node has shape-derived
+    # start/end, which TensorRT rejects with
+    #   "importSlice: axes.allValuesKnown && this version of tensorrt does
+    #    not support dynamic axes".
+    #
+    # Replacing the indexing with ``F.pad`` using *negative* (literal int)
+    # pad amounts expresses the same crop as a Slice whose start/end/axes
+    # are constants, which TensorRT accepts.
     p2d = (padding, padding, padding, padding)
     x_pad = F.pad(x, p2d, "replicate")
     x_list = list()
     for ind_i in range(kernel_size):
         for ind_j in range(kernel_size):
-            x_list.append(x_pad[:, :, ind_i:ind_i + H, ind_j:ind_j + W])
+            # F.pad arg order for 4D tensor: (left, right, top, bottom).
+            # Negative values crop.  The amounts are pure Python ints,
+            # independent of x.shape, so the Slice node gets constants.
+            left = -ind_j
+            right = -(2 * padding - ind_j)
+            top = -ind_i
+            bottom = -(2 * padding - ind_i)
+            x_list.append(F.pad(x_pad, (left, right, top, bottom)))
 
     x_unfold = torch.cat(x_list, dim=1)
 
@@ -30,9 +49,13 @@ def coords_grid(b, h, w, device):
 def bilinear_sampler(img, coords, mode='bilinear'):
     """ Wrapper for grid_sample, uses pixel coordinates """
     W = torch.tensor(img.shape[-1], dtype=img.dtype, device=img.device)
-    xgrid, ygrid = coords.split([1,1], dim=-1)
+    # coords has 4 dims with size 2 on the last dim (xy).
+    # Use explicit positive ``dim=3`` rather than ``dim=-1``: the dynamo
+    # exporter may resolve negative dims via Shape/Sub, yielding a Slice
+    # whose `axes` input is non-constant, which TensorRT rejects.
+    xgrid, ygrid = coords.split([1, 1], dim=3)
     xgrid = 2*xgrid/(W-1) - 1
-    grid = torch.cat([xgrid, ygrid], dim=-1)
+    grid = torch.cat([xgrid, ygrid], dim=3)
     out = F.grid_sample(img, grid, mode=mode, align_corners=False)
 
     return out

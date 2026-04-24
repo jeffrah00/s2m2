@@ -27,14 +27,17 @@ class CostVolume():
         dx = self.dx
         x0 = self.coords - disp.reshape(b * h * w, 1, 1, 1) + dx
         y0 = 0 * x0
-        init_coords_lvl = torch.cat([x0, y0], dim=-1)
+        # x0, y0 are 4D; use explicit positive dim=3 instead of dim=-1 to
+        # avoid the dynamo exporter producing Concat/Slice with shape-derived
+        # axes (TensorRT requires constant axes).
+        init_coords_lvl = torch.cat([x0, y0], dim=3)
         corrs = bilinear_sampler(self.cv, init_coords_lvl)
         corrs = corrs.reshape(b, h, w, 2*self.radius+1).permute(0, 3, 1, 2)
 
         dx = self.dx
         x0 = self.coords / 2 - disp.reshape(b * h * w, 1, 1, 1) / 2 + dx
         y0 = 0 * x0
-        init_coords_lvl = torch.cat([x0, y0], dim=-1)
+        init_coords_lvl = torch.cat([x0, y0], dim=3)
         corrs_2x = bilinear_sampler(self.cv_2x, init_coords_lvl)
         corrs_2x = corrs_2x.reshape(b, h, w, 2*self.radius+1).permute(0, 3, 1, 2)
 
@@ -177,7 +180,14 @@ class DispInit(nn.Module):
         # convert back from log space, recover probabilities by normalization 2W
         w_tensor = torch.tensor(w, dtype=dtype,device=attn.device)
         log_const = torch.log(2*w_tensor)
-        attn = (attn[:, :, :-1, :-1] + log_const).exp().to(dtype)
+        # Remove dustbin row/column via a Crop (F.pad with negative values)
+        # instead of `attn[:, :, :-1, :-1]`. The negative-index slice produces
+        # an ONNX Slice op whose `end` is resolved from the tensor shape at
+        # runtime, which TensorRT's importSlice rejects ("axes.allValuesKnown").
+        # F.pad with literal-int negatives lowers to a Slice with constant
+        # start/end/axes.
+        attn = F.pad(attn, (0, -1, 0, -1))
+        attn = (attn + log_const).exp().to(dtype)
         return attn
 
     def forward(self,
