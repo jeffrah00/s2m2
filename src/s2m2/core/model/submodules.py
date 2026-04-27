@@ -66,6 +66,24 @@ class GroupNormTRT(nn.Module):
         return x * self.weight.reshape(1, self.num_channels, 1, 1) + self.bias.reshape(1, self.num_channels, 1, 1)
 
 
+class LayerNormAffine(nn.Module):
+    """LayerNorm with affine via basic ONNX ops.
+    ONNX LayerNormalization was added in opset 17; targeting opset 16
+    requires decomposition to avoid a non-standard node in TRT 8.5.
+    Weight/bias names and shapes match nn.LayerNorm so checkpoints load unchanged."""
+    def __init__(self, dim: int, eps: float = 1e-5):
+        super().__init__()
+        self.eps = eps
+        self.weight = nn.Parameter(torch.ones(dim))
+        self.bias   = nn.Parameter(torch.zeros(dim))
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        mean = x.mean(dim=-1, keepdim=True)
+        var  = ((x - mean) * (x - mean)).mean(dim=-1, keepdim=True)
+        x    = (x - mean) / (var + self.eps).sqrt()
+        return x * self.weight + self.bias
+
+
 class CNNEncoder(nn.Module):
     """
     init convolution neural networks for feature extraction
@@ -168,7 +186,7 @@ class DispInit(nn.Module):
 
         super(DispInit, self).__init__()
 
-        self.layer_norm = nn.LayerNorm(dim, elementwise_affine=True)
+        self.layer_norm = LayerNormAffine(dim)
         self.ot_iter = ot_iter
         self.use_positivity = use_positivity
 

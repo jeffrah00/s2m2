@@ -17,7 +17,7 @@ def export_onnx(model, onnx_path, left_torch, right_torch):
                           onnx_path,
                           export_params=True,
                           dynamo=True,
-                          opset_version=18,
+                          opset_version=16,
                           verbose=True,
                           do_constant_folding=True,
                           input_names=['input_left', 'input_right'],
