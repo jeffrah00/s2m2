@@ -1,18 +1,9 @@
 import os
+import subprocess
 import torch
 import argparse
 
 project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-
-# On Jetson (JetPack), the real NVML library lives under the tegra path while
-# the CUDA stubs directory contains a stub-only libnvidia-ml.so. If the stubs
-# path appears in LD_LIBRARY_PATH (e.g. sourced via /usr/local/cuda/lib64/stubs)
-# trtexec loads the stub and errors. Prepend the tegra path so it wins.
-_TEGRA_LIB_DIR = '/usr/lib/aarch64-linux-gnu/tegra'
-if os.path.isdir(_TEGRA_LIB_DIR):
-    os.environ['LD_LIBRARY_PATH'] = (
-        _TEGRA_LIB_DIR + ':' + os.environ.get('LD_LIBRARY_PATH', '')
-    )
 
 def get_args_parser():
     parser = argparse.ArgumentParser()
@@ -39,9 +30,24 @@ def main(args):
         fp_16_options = '--fp16 --precisionConstraints=obey --layerPrecisions=node_linalg_vector_norm_2:fp32'
         command += f' {fp_16_options}'
     elif args.precision == 'fp32':
-        command +=' --noTF32'
+        command += ' --noTF32'
 
-    os.system(command)
+    # On Jetson AGX Orin (JetPack 5.1.1) only stub versions of libnvrtc.so
+    # and libnvidia-ml.so are present. trtexec detects stubs at startup and
+    # prints "you are running using the stub version of nvrtc/nvml" on every
+    # line of output. Filter those lines so the real build log stays readable.
+    proc = subprocess.Popen(
+        command,
+        shell=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+        bufsize=1,
+    )
+    for line in proc.stdout:
+        if 'stub version' not in line:
+            print(line, end='', flush=True)
+    proc.wait()
 
 if __name__ == '__main__':
     parser = get_args_parser()
