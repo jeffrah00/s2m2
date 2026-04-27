@@ -75,7 +75,10 @@ def get_pe(h: int, w: int, pe_dim: int, dtype: str, device: str):
         dim_t = torch.linspace(-1, 1, pe_dim//2).to(device).to(dtype)
         pe_x = custom_sinc((dim_t[None, :] - x_pos[:, None]) / sig)
 
-        pe_x = F.normalize(pe_x, p=2, dim=-1)
+        # F.normalize(p=2) exports as linalg_vector_norm in ONNX, which
+        # TensorRT 8.5 (JetPack 5.1.1) rejects in pointWiseBuilder.
+        # Equivalent decomposition into basic ops that TRT 8.5 accepts:
+        pe_x = pe_x / (pe_x.pow(2).sum(dim=-1, keepdim=True).clamp(min=1e-12).sqrt())
         rel_pe_x = pe_x[rel_x_pos + w - 1].reshape(h * w, h * w, pe_dim//2).to(dtype)
 
         L = 2 * h + 1
@@ -84,7 +87,7 @@ def get_pe(h: int, w: int, pe_dim: int, dtype: str, device: str):
         dim_t = torch.linspace(-1, 1, pe_dim//2).to(device).to(dtype)
         pe_y = custom_sinc((dim_t[None, :] - y_pos[:, None]) / sig)
 
-        pe_y = F.normalize(pe_y, p=2, dim=-1)
+        pe_y = pe_y / (pe_y.pow(2).sum(dim=-1, keepdim=True).clamp(min=1e-12).sqrt())
         rel_pe_y = pe_y[rel_y_pos + h - 1].reshape(h * w, h * w, pe_dim//2).to(dtype)
 
         pe = .5*torch.cat([rel_pe_x, rel_pe_y], dim=2)

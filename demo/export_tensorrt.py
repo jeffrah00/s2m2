@@ -27,8 +27,7 @@ def main(args):
     command = f'trtexec --onnx={onnx_file_path} --saveEngine={trt_file_path}'
 
     if args.precision == 'fp16':
-        fp_16_options = '--fp16 --precisionConstraints=obey --layerPrecisions=node_linalg_vector_norm_2:fp32'
-        command += f' {fp_16_options}'
+        command += ' --fp16'
     elif args.precision == 'fp32':
         command += ' --noTF32'
 
