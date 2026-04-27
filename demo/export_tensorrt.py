@@ -4,6 +4,16 @@ import argparse
 
 project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
+# On Jetson (JetPack), the real NVML library lives under the tegra path while
+# the CUDA stubs directory contains a stub-only libnvidia-ml.so. If the stubs
+# path appears in LD_LIBRARY_PATH (e.g. sourced via /usr/local/cuda/lib64/stubs)
+# trtexec loads the stub and errors. Prepend the tegra path so it wins.
+_TEGRA_LIB_DIR = '/usr/lib/aarch64-linux-gnu/tegra'
+if os.path.isdir(_TEGRA_LIB_DIR):
+    os.environ['LD_LIBRARY_PATH'] = (
+        _TEGRA_LIB_DIR + ':' + os.environ.get('LD_LIBRARY_PATH', '')
+    )
+
 def get_args_parser():
     parser = argparse.ArgumentParser()
     parser.add_argument('--model_type', type=str, default='S')
