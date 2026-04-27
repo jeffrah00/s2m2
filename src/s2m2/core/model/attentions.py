@@ -1,7 +1,6 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-import torch.utils.checkpoint as cp
 from torch import Tensor
 
 
@@ -47,7 +46,9 @@ class SelfAttn(nn.Module):
             pe_sum = torch.einsum('...nij, ijc -> ...nic', attn, pe)
             out = out + self.pe_proj(pe_sum)
         else:
-            out = cp.checkpoint(F.scaled_dot_product_attention,q,k,v, use_reentrant=False)
+            # cp.checkpoint is training-only (gradient recomputation); remove
+            # for inference/ONNX export so the dynamo tracer sees plain SDPA.
+            out = F.scaled_dot_product_attention(q, k, v)
 
         out = self.proj(out.transpose(1, 2).reshape(B, N, self.num_heads*self.head_dim))
 

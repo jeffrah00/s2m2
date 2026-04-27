@@ -63,7 +63,8 @@ class GlobalRefiner(nn.Module):
         # image_width = disp.shape[-1]
         disp_nor = disp/1e2
         mask = 1.0 * (conf > .2)
-        conf_logit = (mask*conf).logit(eps=1e-1)
+        _c = (mask * conf).clamp(1e-1, 1 - 1e-1)
+        conf_logit = torch.log(_c / (1 - _c))
 
         feat = self.init_feat(torch.cat([disp_nor*mask, conf_logit, ctx],dim=1).to(disp.dtype))
         refine_feat = self.refine_unet(feat)[0]
@@ -131,8 +132,10 @@ class LocalRefiner(nn.Module):
                 occ: Tensor,
                 cv_fn: Callable) -> Tensor:
 
-        conf_logit = conf.logit(eps=1e-2)
-        occ_logit = occ.logit(eps=1e-2)
+        _conf = conf.clamp(1e-2, 1 - 1e-2)
+        conf_logit = torch.log(_conf / (1 - _conf))
+        _occ = occ.clamp(1e-2, 1 - 1e-2)
+        occ_logit = torch.log(_occ / (1 - _occ))
 
         corr1, corr2 = cv_fn(disp)
         corr_feat1 = self.corr_feat1(corr1 / 16)

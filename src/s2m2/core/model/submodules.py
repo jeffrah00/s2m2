@@ -43,6 +43,29 @@ class CostVolume():
 
         return corrs, corrs_2x
 
+class GroupNormTRT(nn.Module):
+    """GroupNorm via basic ONNX ops (Reshape/Mean/Mul/Sqrt/Div/Add).
+    nn.GroupNorm lowers to aten.native_group_norm which may produce a
+    non-standard ONNX node that TRT 8.5 rejects. Weight/bias shapes are
+    identical to nn.GroupNorm so existing checkpoints load unchanged."""
+    def __init__(self, num_groups: int, num_channels: int, eps: float = 1e-5):
+        super().__init__()
+        self.num_groups = num_groups
+        self.num_channels = num_channels
+        self.eps = eps
+        self.weight = nn.Parameter(torch.ones(num_channels))
+        self.bias = nn.Parameter(torch.zeros(num_channels))
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        orig_shape = x.shape
+        x = x.reshape(orig_shape[0], self.num_groups, -1)
+        mean = x.mean(dim=2, keepdim=True)
+        var = ((x - mean) * (x - mean)).mean(dim=2, keepdim=True)
+        x = (x - mean) / (var + self.eps).sqrt()
+        x = x.reshape(orig_shape)
+        return x * self.weight.reshape(1, self.num_channels, 1, 1) + self.bias.reshape(1, self.num_channels, 1, 1)
+
+
 class CNNEncoder(nn.Module):
     """
     init convolution neural networks for feature extraction
@@ -60,7 +83,7 @@ class CNNEncoder(nn.Module):
         )
 
 
-        self.norm1 = nn.GroupNorm(8, output_dim)
+        self.norm1 = GroupNormTRT(8, output_dim)
 
         self.conv2 = nn.Sequential(nn.Conv2d(output_dim, output_dim, kernel_size=3, stride=1, padding=1),
                                    nn.GELU(),
