@@ -4,6 +4,20 @@ import torch.nn.functional as F
 from torch import Tensor
 
 
+class LayerNormBasic(nn.Module):
+    """LayerNorm via basic ONNX ops (ReduceMean / Mul / Sqrt / Div).
+    nn.LayerNorm(elementwise_affine=False) lowers to aten.native_layer_norm
+    with weight=None which may produce a non-standard ONNX node that
+    TRT 8.5 rejects in pointWiseBuilder."""
+    def __init__(self, dim: int, eps: float = 1e-5):
+        super().__init__()
+        self.eps = eps
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        mean = x.mean(dim=-1, keepdim=True)
+        var = ((x - mean) * (x - mean)).mean(dim=-1, keepdim=True)
+        return (x - mean) / (var + self.eps).sqrt()
+
 class SelfAttn(nn.Module):
     """
     Self Attention Module
@@ -46,9 +60,12 @@ class SelfAttn(nn.Module):
             pe_sum = torch.einsum('...nij, ijc -> ...nic', attn, pe)
             out = out + self.pe_proj(pe_sum)
         else:
-            # cp.checkpoint is training-only (gradient recomputation); remove
-            # for inference/ONNX export so the dynamo tracer sees plain SDPA.
-            out = F.scaled_dot_product_attention(q, k, v)
+            # Manual decomposition: F.scaled_dot_product_attention may be
+            # emitted as a non-standard ONNX op (e.g. com.microsoft.SDPA)
+            # that TRT 8.5 cannot import.
+            attn_w = (q @ k.transpose(2, 3)) * scale
+            attn_w = attn_w.softmax(dim=3)
+            out = attn_w @ v
 
         out = self.proj(out.transpose(1, 2).reshape(B, N, self.num_heads*self.head_dim))
 
@@ -84,12 +101,14 @@ class CrossAttn(nn.Module):
         qx = self.q(x).reshape(B, N, self.num_heads, self.head_dim).transpose(1, 2)
         ky = self.k(y).reshape(B, N, self.num_heads, self.head_dim).transpose(1, 2)
         vy = self.v(y).reshape(B, N, self.num_heads, self.head_dim).transpose(1, 2)
-        x_out = F.scaled_dot_product_attention(qx,ky,vy)
+        attn_xy = (qx @ ky.transpose(2, 3)) * self.scale
+        x_out = attn_xy.softmax(dim=3) @ vy
 
         kx = self.k(x).reshape(B, N, self.num_heads, self.head_dim).transpose(1, 2)
         qy = self.q(y).reshape(B, N, self.num_heads, self.head_dim).transpose(1, 2)
         vx = self.v(x).reshape(B, N, self.num_heads, self.head_dim).transpose(1, 2)
-        y_out = F.scaled_dot_product_attention(qy,kx,vx)
+        attn_yx = (qy @ kx.transpose(2, 3)) * self.scale
+        y_out = attn_yx.softmax(dim=3) @ vx
 
         x_out = self.proj(x_out.transpose(1, 2).reshape(B, N, self.num_heads*self.head_dim))
         y_out = self.proj(y_out.transpose(1, 2).reshape(B, N, self.num_heads*self.head_dim))
@@ -115,7 +134,7 @@ class SelfAttnBlock1D(nn.Module):
                              num_heads=self.num_heads,
                              dim_expansion=dim_expansion,
                              use_pe=use_pe)
-        self.norm_pre = nn.LayerNorm(self.dim, elementwise_affine=False)
+        self.norm_pre = LayerNormBasic(self.dim)
 
     def forward(self, z: torch.Tensor, pe: torch.Tensor=None):
 
@@ -146,7 +165,7 @@ class CrossAttnBlock1D(nn.Module):
                               self.num_heads,
                               dim_expansion=dim_expansion)
 
-        self.norm_pre = nn.LayerNorm(self.dim, elementwise_affine=False)
+        self.norm_pre = LayerNormBasic(self.dim)
 
     def forward(self, z: torch.Tensor):
 
@@ -180,7 +199,7 @@ class SelfAttnBlock2D(nn.Module):
                              num_heads=num_heads,
                              dim_expansion=dim_expansion,
                              use_pe=use_pe)
-        self.norm_pre = nn.LayerNorm(self.dim, elementwise_affine=False)
+        self.norm_pre = LayerNormBasic(self.dim)
 
 
     def forward(self, z: torch.Tensor, pe: torch.Tensor=None):
@@ -211,7 +230,7 @@ class CrossAttnBlock2D(nn.Module):
         self.attn = CrossAttn(self.dim,
                               self.num_heads,
                               dim_expansion=dim_expansion)
-        self.norm_pre = nn.LayerNorm(self.dim, elementwise_affine=False)
+        self.norm_pre = LayerNormBasic(self.dim)
 
     def forward(self, z: torch.Tensor):
 
@@ -241,7 +260,7 @@ class FFN(nn.Module):
                                  nn.GELU(),
                                  nn.Linear(dim_expansion * self.dim, self.dim))
 
-        self.norm_pre = nn.LayerNorm(self.dim, elementwise_affine=False)
+        self.norm_pre = LayerNormBasic(self.dim)
 
     def forward(self, z: torch.Tensor):
         # z: [B, H, W, C]
