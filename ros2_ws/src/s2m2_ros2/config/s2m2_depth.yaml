@@ -1,0 +1,18 @@
+s2m2_stereo_depth_node:
+  ros__parameters:
+    model_type: "L"
+    weights_dir: "weights/pretrain_weights"
+    refine_iter: 3
+    allow_negative_disparity: false
+    backend: "pytorch"
+    trt_engine_path: ""
+    device: "cuda:0"
+    depth_encoding: "32FC1"
+    min_depth_m: 0.2
+    max_depth_m: 20.0
+    min_confidence: 0.0
+    publish_confidence: true
+    fx_fallback: 0.0
+    baseline_m_fallback: 0.0
+    sync_slop_s: 0.05
+    qos_reliability: "reliable"
