@@ -141,6 +141,13 @@ fi
 
 # 5. colcon build s2m2_ros2
 if [[ "$SKIP_COLCON" -eq 0 ]]; then
+    # colcon-ros's ament_python task runs `python3 setup.py develop --uninstall`
+    # whenever it replaces an existing install. setuptools >= 80 removed that
+    # option (along with --editable), so pin to an older release in the active
+    # Python env before building. pip's isolated PEP 517 build for the s2m2
+    # package is unaffected (it pulls its own build-time setuptools).
+    echo "==> Pinning setuptools<80 for colcon compatibility"
+    pip install --break-system-packages --no-deps 'setuptools<80'
     echo "==> Building s2m2_ros2 with colcon"
     (
         cd "$REPO_ROOT/ros2_ws"
