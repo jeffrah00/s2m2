@@ -370,36 +370,49 @@ and nvblox subscribed to:
 
 ##### One-shot launch (recommended)
 
-`s2m2_ros2` ships a thin wrapper around
-`nvblox_examples_bringup/launch/realsense_example.launch.py`. It
-**includes the original launch unmodified**, then adds the s2m2 node and a
-single `SetRemap` so nvblox subscribes to s2m2 depth instead of the
-splitter's depth:
+`ros2_ws/src/s2m2_ros2/launch/s2m2_realsense_nvblox.launch.py` is a
+**vendored copy** of `nvblox_examples_bringup/launch/realsense_example.launch.py`
+(pinned to `NVIDIA-ISAAC-ROS/isaac_ros_nvblox` branch
+[`release-4.3`](https://github.com/NVIDIA-ISAAC-ROS/isaac_ros_nvblox/tree/release-4.3))
+with three small additions, each fenced by `# >>> s2m2:` … `# <<< s2m2`
+markers:
+
+1. three new launch args (`s2m2_params_file`, `s2m2_depth_topic`,
+   `s2m2_depth_info_topic`),
+2. a `SetRemap` that diverts nvblox's `camera_0/depth/image` subscription
+   to the s2m2 depth topic, and
+3. a `Node(...)` for `s2m2_stereo_depth_node`, subscribed to the
+   `realsense_splitter_node`'s emitter-off IR pair.
+
+Run it with:
 
 ```bash
 ros2 launch s2m2_ros2 s2m2_realsense_nvblox.launch.py
 ```
 
-You inherit everything `realsense_example.launch.py` already does — the
-RealSense driver, the splitter, VSLAM, nvblox, RViz/Foxglove, optional
-people segmentation/detection, multi-camera support, and rosbag playback.
-s2m2 subscribes to the splitter's clean (emitter-off) IR pair at
-`/camera0/realsense_splitter_node/output/infra_{1,2}` so we don't have to
-disable or reconfigure the IR emitter.
+You inherit everything the upstream launch already does — RealSense
+driver, splitter, VSLAM, nvblox, RViz/Foxglove, optional people
+segmentation/detection, multi-camera, rosbag playback. s2m2 subscribes
+to the splitter's clean (emitter-off) IR at
+`/camera0/realsense_splitter_node/output/infra_{1,2}`, so we don't touch
+the emitter config.
 
-Useful overrides:
+Args added by the s2m2 patch (every other arg comes straight from the
+vendored upstream file — `mode`, `num_cameras`, `run_realsense`,
+`rosbag`, `rosbag_args`, `log_level`, `container_name`,
+`attach_to_container`, `use_foxglove_whitelist`,
+`camera_serial_numbers`, `people_segmentation`, `multicam_urdf_path`):
 
 | arg | default | purpose |
 | --- | --- | --- |
-| `params_file` | `<share>/s2m2_ros2/config/s2m2_depth.yaml` | s2m2 node parameters |
-| `camera_namespace` | `camera0` | matches realsense_example |
-| `s2m2_depth_topic` | `/camera0/s2m2/depth/image` | where s2m2 publishes; nvblox is redirected to subscribe here |
-| `s2m2_depth_info_topic` | `/camera0/depth/camera_info` | CameraInfo for the s2m2 depth |
-| `mode` | `static` | passed through to `realsense_example.launch.py` (`static`, `people_segmentation`, …) |
-| `num_cameras` | `1` | passed through (up to 4) |
-| `run_realsense` | `True` | set `False` if a RealSense driver is already running |
-| `rosbag`, `rosbag_args` | `None`, `""` | play back a bag instead of using a live camera |
-| `log_level`, `container_name`, `attach_to_container`, `use_foxglove_whitelist`, `camera_serial_numbers`, `people_segmentation` | (defaults from `realsense_example.launch.py`) | passed through |
+| `s2m2_params_file` | `<share>/s2m2_ros2/config/s2m2_depth.yaml` | s2m2 node parameters |
+| `s2m2_depth_topic` | `/camera0/s2m2/depth/image` | where s2m2 publishes; nvblox is remapped to subscribe here |
+| `s2m2_depth_info_topic` | `/camera0/depth/camera_info` | CameraInfo for the s2m2 depth output |
+
+To re-vendor against a newer Isaac ROS release, refetch
+`nvblox_examples_bringup/launch/realsense_example.launch.py` from the
+new tag, then re-apply the four `# >>> s2m2: … # <<< s2m2` blocks (one
+import, one args block, one `SetRemap`, one `Node`).
 
 ##### Manual three-terminal version
 

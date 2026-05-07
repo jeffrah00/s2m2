@@ -1,123 +1,281 @@
-"""Wrapper around nvblox_examples_bringup/launch/realsense_example.launch.py
-that adds the s2m2 stereo depth node and redirects nvblox's depth
-subscription to s2m2's output.
+# SPDX-FileCopyrightText: NVIDIA CORPORATION & AFFILIATES
+# Copyright (c) 2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+# http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+#
+# SPDX-License-Identifier: Apache-2.0
 
-The original ``realsense_example.launch.py`` brings up:
-    - the RealSense driver + ``realsense_splitter_node`` (which publishes
-      *clean*, emitter-off IR pairs at ``/<ns>/realsense_splitter_node/output/infra_{1,2}``
-      and emitter-on depth at ``/<ns>/realsense_splitter_node/output/depth``)
-    - VSLAM, segmentation/detection (when ``mode`` selects them), nvblox, RViz/Foxglove
+# ---------------------------------------------------------------------------
+# Vendored from NVIDIA-ISAAC-ROS/isaac_ros_nvblox @ release-4.3
+# (nvblox_examples/nvblox_examples_bringup/launch/realsense_example.launch.py).
+# The original file is unchanged below except for the lines marked
+# `# >>> s2m2:` ... `# <<< s2m2`. Those additions:
+#   * declare three s2m2 launch args (params_file, depth_topic, depth_info_topic),
+#   * register a SetRemap so nvblox subscribes to s2m2 depth instead of
+#     the realsense_splitter_node's depth output,
+#   * spawn the s2m2_ros2 stereo_depth_node subscribed to the splitter's
+#     emitter-off IR pair.
+# To re-vendor against a newer Isaac ROS release, refetch the upstream file
+# and re-apply the `# >>> s2m2:` blocks below.
+# ---------------------------------------------------------------------------
 
-This launch keeps all of that and only adds two things:
+from isaac_ros_launch_utils.all_types import *
+import isaac_ros_launch_utils as lu
 
-  1. ``s2m2_stereo_depth_node`` subscribed to the splitter's emitter-off IR
-     pair (with CameraInfo from the realsense driver), publishing depth on
-     a fresh topic so it does not collide with the splitter's depth output.
-  2. A scope-level ``SetRemap`` that overrides nvblox's
-     ``camera_0/depth/image`` subscription to point at s2m2's depth topic.
-     The splitter still publishes its own depth, but nobody subscribes to
-     it; everything else (color, color/info, depth/info) keeps its
-     original routing.
+from nvblox_ros_python_utils.nvblox_launch_utils import NvbloxMode, NvbloxCamera, NvbloxPeopleSegmentation
+from nvblox_ros_python_utils.nvblox_constants import NVBLOX_CONTAINER_NAME
 
-All public launch args of ``realsense_example.launch.py`` are exposed as
-pass-throughs.
-"""
-
-import os
-
-from ament_index_python.packages import get_package_share_directory
-from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument, GroupAction, IncludeLaunchDescription
-from launch.launch_description_sources import PythonLaunchDescriptionSource
-from launch.substitutions import LaunchConfiguration, PathJoinSubstitution
+# >>> s2m2: explicit launch_ros imports for the actions we add below
 from launch_ros.actions import Node, SetRemap
-from launch_ros.substitutions import FindPackageShare
+# <<< s2m2
 
 
-def generate_launch_description():
-    pkg_share = get_package_share_directory("s2m2_ros2")
-    default_params = os.path.join(pkg_share, "config", "s2m2_depth.yaml")
-
-    args = [
-        # s2m2-specific
-        DeclareLaunchArgument(
-            "params_file", default_value=default_params,
-            description="s2m2 stereo_depth_node parameter file."),
-        DeclareLaunchArgument(
-            "camera_namespace", default_value="camera0",
-            description="RealSense topic namespace used by realsense_example.launch.py."),
-        DeclareLaunchArgument(
-            "s2m2_depth_topic", default_value="/camera0/s2m2/depth/image",
-            description="Topic where s2m2 publishes depth and where nvblox is redirected to subscribe."),
-        DeclareLaunchArgument(
-            "s2m2_depth_info_topic", default_value="/camera0/depth/camera_info",
-            description="CameraInfo topic for the s2m2 depth output."),
-
-        # Pass-through args for realsense_example.launch.py
-        DeclareLaunchArgument("mode", default_value="static"),
-        DeclareLaunchArgument("num_cameras", default_value="1"),
-        DeclareLaunchArgument("run_realsense", default_value="True"),
-        DeclareLaunchArgument("rosbag", default_value="None"),
-        DeclareLaunchArgument("rosbag_args", default_value=""),
-        DeclareLaunchArgument("log_level", default_value="info"),
-        DeclareLaunchArgument("attach_to_container", default_value="False"),
-        DeclareLaunchArgument("container_name", default_value="nvblox_container"),
-        DeclareLaunchArgument("use_foxglove_whitelist", default_value="True"),
-        DeclareLaunchArgument("camera_serial_numbers", default_value=""),
-        DeclareLaunchArgument(
-            "people_segmentation",
-            default_value="peoplesemsegnet_vanilla"),
-    ]
-
-    cam_ns = LaunchConfiguration("camera_namespace")
-    s2m2_depth_topic = LaunchConfiguration("s2m2_depth_topic")
-    s2m2_depth_info_topic = LaunchConfiguration("s2m2_depth_info_topic")
-
-    s2m2_node = Node(
-        package="s2m2_ros2",
-        executable="stereo_depth_node",
-        name="s2m2_stereo_depth_node",
-        output="screen",
-        parameters=[LaunchConfiguration("params_file")],
-        remappings=[
-            ("left/image_rect",  ["/", cam_ns, "/realsense_splitter_node/output/infra_1"]),
-            ("right/image_rect", ["/", cam_ns, "/realsense_splitter_node/output/infra_2"]),
-            ("left/camera_info",  ["/", cam_ns, "/infra1/camera_info"]),
-            ("right/camera_info", ["/", cam_ns, "/infra2/camera_info"]),
-            ("depth/image",       s2m2_depth_topic),
-            ("depth/camera_info", s2m2_depth_info_topic),
+def generate_launch_description() -> LaunchDescription:
+    args = lu.ArgumentContainer()
+    args.add_arg(
+        'rosbag', 'None', description='Path to rosbag (running on sensor if not set).', cli=True)
+    args.add_arg('rosbag_args', '',
+                 description='Additional args for ros2 bag play.', cli=True)
+    args.add_arg('log_level', 'info', choices=[
+                 'debug', 'info', 'warn'], cli=True)
+    args.add_arg('num_cameras', 1,
+                 description='How many cameras to use.', cli=True)
+    args.add_arg('camera_serial_numbers', '',
+                 description='List of the serial no of the extra cameras. (comma separated)',
+                 cli=True)
+    args.add_arg(
+        'multicam_urdf_path',
+        lu.get_path('nvblox_examples_bringup',
+                    'config/urdf/4_realsense_carter_example_calibration.urdf.xacro'),
+        description='Path to a URDF file describing the camera rig extrinsics. Only used in multicam.',
+        cli=True)
+    args.add_arg(
+        'mode',
+        default=NvbloxMode.static,
+        choices=NvbloxMode.names(),
+        description='The nvblox mode.',
+        cli=True)
+    args.add_arg(
+        'people_segmentation',
+        default=NvbloxPeopleSegmentation.peoplesemsegnet_vanilla,
+        choices=[
+            str(NvbloxPeopleSegmentation.peoplesemsegnet_vanilla),
+            str(NvbloxPeopleSegmentation.peoplesemsegnet_shuffleseg)
         ],
+        description='The  model type of PeopleSemSegNet (only used when mode:=people_segmentation).',
+        cli=True)
+    args.add_arg(
+        'attach_to_container',
+        'False',
+        description='Add components to an existing component container.',
+        cli=True)
+    args.add_arg(
+        'container_name',
+        NVBLOX_CONTAINER_NAME,
+        description='Name of the component container.')
+    args.add_arg(
+        'run_realsense',
+        'True',
+        description='Launch Realsense drivers')
+    args.add_arg(
+        'use_foxglove_whitelist',
+        True,
+        description='Disable visualization of bandwidth-heavy topics',
+        cli=True)
+    # >>> s2m2: arg surface for the patched-in stereo depth node
+    args.add_arg(
+        's2m2_params_file',
+        lu.get_path('s2m2_ros2', 'config/s2m2_depth.yaml'),
+        description='Parameter file for the s2m2 stereo_depth_node.',
+        cli=True)
+    args.add_arg(
+        's2m2_depth_topic',
+        '/camera0/s2m2/depth/image',
+        description='Where s2m2 publishes depth; nvblox is remapped to subscribe here.',
+        cli=True)
+    args.add_arg(
+        's2m2_depth_info_topic',
+        '/camera0/depth/camera_info',
+        description='CameraInfo topic for s2m2 depth (defaults to the realsense depth/camera_info).',
+        cli=True)
+    # <<< s2m2
+    actions = args.get_launch_actions()
+
+    # Globally set use_sim_time if we're running from bag or sim
+    actions.append(
+        SetParameter('use_sim_time', True, condition=IfCondition(lu.is_valid(args.rosbag))))
+
+    # Single or Multi-realsense
+    is_multi_cam = UnlessCondition(lu.is_equal(args.num_cameras, '1'))
+    camera_mode = lu.if_else_substitution(
+        lu.is_equal(args.num_cameras, '1'),
+        str(NvbloxCamera.realsense),
+        str(NvbloxCamera.multi_realsense)
+    )
+    # Only up to 4 Realsenses is supported.
+    actions.append(
+        lu.assert_condition(
+            'Up to 4 cameras have been tested! num_cameras must be less than 5.',
+            IfCondition(PythonExpression(['int("', args.num_cameras, '") > 4']))),
     )
 
-    # SetRemap propagates into the included launches, including nvblox.launch.py
-    # nested inside realsense_example.launch.py. nvblox subscribes internally
-    # to camera_0/depth/image (with underscore) and the realsense profile
-    # remaps that to the splitter's depth output by default; we override it
-    # here to use s2m2's depth instead.
-    nvblox_with_s2m2_depth = GroupAction(actions=[
-        SetRemap(src="camera_0/depth/image", dst=s2m2_depth_topic),
-        IncludeLaunchDescription(
-            PythonLaunchDescriptionSource(
-                PathJoinSubstitution([
-                    FindPackageShare("nvblox_examples_bringup"),
-                    "launch",
-                    "realsense_example.launch.py",
-                ])
-            ),
+    run_rs_driver = UnlessCondition(
+        OrSubstitution(lu.is_valid(args.rosbag), lu.is_false(args.run_realsense)))
+    # Realsense
+    actions.append(
+        lu.include(
+            'nvblox_examples_bringup',
+            'launch/sensors/realsense.launch.py',
             launch_arguments={
-                "mode": LaunchConfiguration("mode"),
-                "num_cameras": LaunchConfiguration("num_cameras"),
-                "run_realsense": LaunchConfiguration("run_realsense"),
-                "rosbag": LaunchConfiguration("rosbag"),
-                "rosbag_args": LaunchConfiguration("rosbag_args"),
-                "log_level": LaunchConfiguration("log_level"),
-                "attach_to_container": LaunchConfiguration("attach_to_container"),
-                "container_name": LaunchConfiguration("container_name"),
-                "use_foxglove_whitelist": LaunchConfiguration("use_foxglove_whitelist"),
-                "camera_serial_numbers": LaunchConfiguration("camera_serial_numbers"),
-                "people_segmentation": LaunchConfiguration("people_segmentation"),
-            }.items(),
-        ),
-    ])
+                'container_name': args.container_name,
+                'camera_serial_numbers': args.camera_serial_numbers,
+                'num_cameras': args.num_cameras,
+            },
+            condition=run_rs_driver))
 
-    return LaunchDescription(args + [nvblox_with_s2m2_depth, s2m2_node])
+    # Visual SLAM
+    actions.append(
+        lu.include(
+            'nvblox_examples_bringup',
+            'launch/perception/vslam.launch.py',
+            launch_arguments={
+                'container_name': args.container_name,
+                'camera': camera_mode,
+            },
+            # Delay for 1 second to make sure that the static topics from the rosbag are published.
+            delay=1.0,
+        ))
+    # People detection for multi-RS
+    camera_namespaces = ['camera0', 'camera1', 'camera2', 'camera3']
+    camera_input_topics = []
+    input_camera_info_topics= []
+    output_resized_image_topics = []
+    output_resized_camera_info_topics = []
+    for ns in camera_namespaces:
+        camera_input_topics.append(f'/{ns}/color/image_raw')
+        input_camera_info_topics.append(f'/{ns}/color/camera_info')
+        output_resized_image_topics.append(f'/{ns}/segmentation/image_resized')
+        output_resized_camera_info_topics.append(f'/{ns}/segmentation/camera_info_resized')
+
+    # People segmentation
+    actions.append(
+        lu.include(
+            'nvblox_examples_bringup',
+            'launch/perception/segmentation.launch.py',
+            launch_arguments={
+                'container_name': args.container_name,
+                'people_segmentation': args.people_segmentation,
+                'namespace_list': camera_namespaces,
+                'input_topic_list': camera_input_topics,
+                'input_camera_info_topic_list': input_camera_info_topics,
+                'output_resized_image_topic_list': output_resized_image_topics,
+                'output_resized_camera_info_topic_list': output_resized_camera_info_topics,
+                'num_cameras': args.num_cameras,
+                # fixing rosbag replay dropping fps
+                'one_container_per_camera': True
+            },
+            condition=IfCondition(lu.has_substring(args.mode, NvbloxMode.people_segmentation))))
+
+    # People detection
+    actions.append(
+        lu.include(
+            'nvblox_examples_bringup',
+            'launch/perception/detection.launch.py',
+            launch_arguments={
+                'namespace_list': camera_namespaces,
+                'input_topic_list': camera_input_topics,
+                'num_cameras': args.num_cameras,
+                'container_name': args.container_name,
+                # fixing rosbag replay dropping fps
+                'one_container_per_camera': True
+            },
+            condition=IfCondition(lu.has_substring(args.mode, NvbloxMode.people_detection))))
+
+    # >>> s2m2: redirect nvblox's depth subscription to s2m2 depth.
+    # SetRemap applies to all subsequent actions in this scope; the nvblox
+    # include below is the only consumer of camera_0/depth/image, so this
+    # cleanly diverts it to whatever s2m2 publishes on s2m2_depth_topic.
+    actions.append(SetRemap(src='camera_0/depth/image', dst=args.s2m2_depth_topic))
+    # <<< s2m2
+
+    # Nvblox
+    actions.append(
+        lu.include(
+            'nvblox_examples_bringup',
+            'launch/perception/nvblox.launch.py',
+            launch_arguments={
+                'container_name': args.container_name,
+                'mode': args.mode,
+                'camera': camera_mode,
+                'num_cameras': args.num_cameras,
+            }))
+
+    # >>> s2m2: spawn the stereo depth node, subscribed to the splitter's
+    # emitter-off IR pair (CameraInfo comes from the realsense driver, since
+    # the splitter doesn't republish camera_info).
+    actions.append(Node(
+        package='s2m2_ros2',
+        executable='stereo_depth_node',
+        name='s2m2_stereo_depth_node',
+        output='screen',
+        parameters=[args.s2m2_params_file],
+        remappings=[
+            ('left/image_rect',  '/camera0/realsense_splitter_node/output/infra_1'),
+            ('right/image_rect', '/camera0/realsense_splitter_node/output/infra_2'),
+            ('left/camera_info',  '/camera0/infra1/camera_info'),
+            ('right/camera_info', '/camera0/infra2/camera_info'),
+            ('depth/image',       args.s2m2_depth_topic),
+            ('depth/camera_info', args.s2m2_depth_info_topic),
+        ],
+    ))
+    # <<< s2m2
+
+    # TF transforms for multi-realsense
+    actions.append(
+        lu.add_robot_description(robot_calibration_path=args.multicam_urdf_path,
+                                 condition=is_multi_cam)
+    )
+
+    # Play ros2bag
+    actions.append(
+        lu.play_rosbag(
+            bag_path=args.rosbag,
+            additional_bag_play_args=args.rosbag_args,
+            condition=IfCondition(lu.is_valid(args.rosbag))))
+
+    # Visualization
+    actions.append(
+        lu.include(
+            'nvblox_examples_bringup',
+            'launch/visualization/visualization.launch.py',
+            launch_arguments={
+                'mode': args.mode,
+                'camera': camera_mode,
+                'use_foxglove_whitelist': args.use_foxglove_whitelist,
+            }))
+
+    # Container
+    # NOTE: By default (attach_to_container:=False) we launch a container which all nodes are
+    # added to, however, we expose the option to not launch a container, and instead attach to
+    # an already running container. The reason for this is that when running live on multiple
+    # realsenses we have experienced unreliability in the bringup of multiple realsense drivers.
+    # To (partially) mitigate this issue the suggested workflow for multi-realsenses is to:
+    # 1. Launch RS (cameras & splitter) and start a component_container
+    # 2. Launch nvblox + cuvslam and attached to the above running component container
+
+    actions.append(
+        lu.component_container(
+            NVBLOX_CONTAINER_NAME, condition=UnlessCondition(args.attach_to_container),
+            log_level=args.log_level))
+
+    return LaunchDescription(actions)
