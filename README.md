@@ -355,6 +355,80 @@ Nvblox additionally requires a TF tree and odometry; that is the
 responsibility of the rest of your robot stack and is intentionally out of
 scope here.
 
+#### Replacing RealSense depth in `realsense_example.launch.py`
+
+`nvblox_examples_bringup`'s `realsense_example.launch.py` brings up the
+RealSense driver, a `realsense_splitter_node` (which gates the IR projector),
+and nvblox subscribed to:
+
+| nvblox topic | RealSense source |
+| --- | --- |
+| `camera_0/depth/image` | `/camera0/realsense_splitter_node/output/depth` |
+| `camera_0/depth/camera_info` | `/camera0/depth/camera_info` |
+| `camera_0/color/image` | `/camera0/color/image_raw` |
+| `camera_0/color/camera_info` | `/camera0/color/camera_info` |
+
+To swap in s2m2 depth, run the RealSense driver with the IR emitter **off**
+(its dot pattern contaminates the IR images that s2m2 consumes), point
+s2m2 at the rectified IR pair, and remap nvblox's depth subscription to
+s2m2's output.
+
+```bash
+# terminal 1 — RealSense driver only (no splitter, IR emitter disabled)
+ros2 launch realsense2_camera rs_launch.py \
+    camera_namespace:=camera0 \
+    enable_infra1:=true enable_infra2:=true enable_color:=true \
+    depth_module.emitter_enabled:=0 \
+    align_depth.enable:=false \
+    rgb_camera.profile:=640x480x30 \
+    depth_module.profile:=640x480x30
+
+# terminal 2 — s2m2 stereo depth from the RealSense IR pair,
+# publishing to /camera0/depth/image (the namespace nvblox already wants)
+ros2 launch s2m2_ros2 s2m2_depth.launch.py \
+    left_image_topic:=/camera0/infra1/image_rect_raw \
+    right_image_topic:=/camera0/infra2/image_rect_raw \
+    left_info_topic:=/camera0/infra1/camera_info \
+    right_info_topic:=/camera0/infra2/camera_info \
+    depth_image_topic:=/camera0/depth/image \
+    depth_info_topic:=/camera0/depth/camera_info
+
+# terminal 3 — nvblox alone (skip realsense_example.launch.py so the splitter
+# doesn't also write to /camera_0/depth/image). Remap inputs to match.
+ros2 launch nvblox_examples_bringup nvblox.launch.py \
+    --ros-args \
+        -r camera_0/depth/image:=/camera0/depth/image \
+        -r camera_0/depth/camera_info:=/camera0/depth/camera_info \
+        -r camera_0/color/image:=/camera0/color/image_raw \
+        -r camera_0/color/camera_info:=/camera0/color/camera_info
+```
+
+Why we don't reuse `realsense_example.launch.py` directly: it always wires
+nvblox to `/camera0/realsense_splitter_node/output/depth`, so two
+publishers (the splitter and us) would fight for the same topic. Bringing
+up `nvblox.launch.py` standalone with the four `--ros-args -r` remaps gives
+us the same nvblox configuration without the splitter.
+
+Verify with `rqt_graph` — `s2m2_stereo_depth_node` should be the only
+publisher on `/camera0/depth/image`, and `nvblox_node` should be its
+subscriber. RViz: visualize `/nvblox_node/mesh` (or `/nvblox_node/esdf_pointcloud`)
+to confirm the volumetric reconstruction is being driven by s2m2 depth.
+
+A few RealSense-specific notes:
+- s2m2 expects RGB inputs (3 channels). The node automatically replicates
+  RealSense's `mono8` IR images to 3 channels, so no extra conversion is
+  needed.
+- Baseline is read from `/camera0/infra2/camera_info`'s `P[3]` (≈0.05 m on
+  D435, ≈0.095 m on D455). If the right `camera_info` doesn't carry it,
+  set `baseline_m_fallback` (50 mm for D435, 95 mm for D455).
+- Drop `depth_module.emitter_enabled:=0` only if you're using a fixed mount
+  with separate room lighting — leaving the dot projector on hurts s2m2
+  badly because the dots break the assumption of natural-texture stereo.
+
+References:
+- [Isaac ROS Nvblox: RealSense tutorial](https://nvidia-isaac-ros.github.io/concepts/scene_reconstruction/nvblox/tutorials/tutorial_realsense.html)
+- [Isaac ROS Nvblox: topics & services](https://nvidia-isaac-ros.github.io/repositories_and_packages/isaac_ros_nvblox/isaac_ros_nvblox/api/topics_and_services.html)
+
 ### Limitations
 
 - Inputs must already be rectified (use `isaac_ros_image_proc` or
