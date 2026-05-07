@@ -20,21 +20,38 @@ The depth pipeline applies the standard rectified-stereo formula
 `Z = fx * baseline / disp`, masks invalid disparities to 0, and clamps depth
 to `[min_depth_m, max_depth_m]`.
 
-## Build
+## Install
 
-This package lives inside the s2m2 repository under `ros2_ws/src/s2m2_ros2`.
-It depends on the s2m2 Python package (`pip install -e .` from the repo root)
-and on a working ROS2 Jazzy environment.
+`s2m2_ros2` is a separate package from `s2m2` and uses a different build
+system (colcon / ament_python vs. pip). You must install both, in this
+order, in the **same Python environment**:
+
+**1. Install the s2m2 Python package** (so `import s2m2` works):
 
 ```bash
-# from the s2m2 repo root, with the conda env that has s2m2 installed active
+# from the repo root, in the conda env you intend to run the node from
+pip install -e .
+```
+
+**2. Build the ROS2 wrapper** (so `ros2 launch s2m2_ros2 ...` works):
+
+```bash
+# same conda env, with ROS2 Jazzy sourced
 cd ros2_ws
 colcon build --packages-select s2m2_ros2 --symlink-install
 source install/setup.bash
 ```
 
-`torch` and `s2m2` are not declared as ROS dependencies (rosdep cannot resolve
-them); they must be importable in the Python environment that runs the node.
+Why two steps: `s2m2` is a regular Python package distributed via
+`pyproject.toml`; the ROS2 wrapper is an `ament_python` package built by
+colcon and installed into a ROS overlay. They have different install
+destinations and neither's installer knows about the other.
+
+`torch` and `s2m2` are intentionally not declared as ROS dependencies
+(rosdep cannot resolve them). They must be importable in the same Python
+environment that runs the node — i.e. the env where you ran `pip install -e .`
+must also be active when you run `colcon build` and `ros2 launch`, otherwise
+the node will fail with `ModuleNotFoundError: s2m2` or `torch`.
 
 ## Run
 
