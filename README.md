@@ -284,14 +284,22 @@ the node will fail with `ModuleNotFoundError: s2m2` or `torch`.
 
 ### Run
 
+For a turnkey setup with an Intel RealSense + Nvblox, jump straight to
+[Wiring into Nvblox](#wiring-into-nvblox) and use
+`s2m2_realsense_nvblox.launch.py`.
+
+For any other rectified stereo source, run the node directly with
+`ros2 run` and remap topics to your camera:
+
 ```bash
-ros2 launch s2m2_ros2 s2m2_depth.launch.py \
-    left_image_topic:=/stereo/left/image_rect \
-    right_image_topic:=/stereo/right/image_rect \
-    left_info_topic:=/stereo/left/camera_info \
-    right_info_topic:=/stereo/right/camera_info \
-    depth_image_topic:=/camera_0/depth/image \
-    depth_info_topic:=/camera_0/depth/camera_info
+ros2 run s2m2_ros2 stereo_depth_node --ros-args \
+    -r left/image_rect:=/stereo/left/image_rect \
+    -r right/image_rect:=/stereo/right/image_rect \
+    -r left/camera_info:=/stereo/left/camera_info \
+    -r right/camera_info:=/stereo/right/camera_info \
+    -r depth/image:=/camera_0/depth/image \
+    -r depth/camera_info:=/camera_0/depth/camera_info \
+    --params-file <path>/install/s2m2_ros2/share/s2m2_ros2/config/s2m2_depth.yaml
 ```
 
 Tune behaviour through `ros2_ws/src/s2m2_ros2/config/s2m2_depth.yaml`
@@ -323,12 +331,16 @@ Build an engine via the s2m2 demo at the resolution your stereo camera streams
 python demo/export_tensorrt.py --model_type L --img_width 1216 --img_height 1024 --precision fp16
 ```
 
-Then launch with:
+Then run with:
 
 ```bash
-ros2 launch s2m2_ros2 s2m2_depth.launch.py \
-    --ros-args -p backend:=tensorrt -p trt_engine_path:=/abs/path/to/engine.trt
+ros2 run s2m2_ros2 stereo_depth_node --ros-args \
+    -p backend:=tensorrt -p trt_engine_path:=/abs/path/to/engine.trt
 ```
+
+(or set the same params under `s2m2_stereo_depth_node.ros__parameters` in
+`config/s2m2_depth.yaml` and pass `--params-file …` so they take effect
+under `s2m2_realsense_nvblox.launch.py` as well.)
 
 The TensorRT engine is fixed-shape; if the incoming image (after pad-to-32)
 does not match the engine's input dims, the node logs an error and skips
@@ -336,20 +348,10 @@ the frame.
 
 ### Wiring into Nvblox
 
-Nvblox consumes `camera_*/depth/image` plus `camera_*/depth/camera_info`. The
-default launch arguments already publish to `/camera_0/depth/...`, so a
-typical setup is:
-
-```bash
-# terminal 1: stereo source publishing rectified left/right images + camera_info
-ros2 launch isaac_ros_image_proc isaac_ros_image_proc.launch.py ...
-
-# terminal 2: this node
-ros2 launch s2m2_ros2 s2m2_depth.launch.py
-
-# terminal 3: nvblox, subscribing to /camera_0/depth/...
-ros2 launch nvblox_examples_bringup ...
-```
+Nvblox consumes `camera_*/depth/image` plus `camera_*/depth/camera_info`.
+The supported integration is the bundled
+`s2m2_realsense_nvblox.launch.py` described below, which wires s2m2 into
+Isaac ROS Nvblox's RealSense example end-to-end.
 
 Nvblox additionally requires a TF tree and odometry; that is the
 responsibility of the rest of your robot stack and is intentionally out of
@@ -431,13 +433,13 @@ ros2 launch realsense2_camera rs_launch.py \
 
 # terminal 2 — s2m2 stereo depth from the RealSense IR pair,
 # publishing to /camera0/depth/image
-ros2 launch s2m2_ros2 s2m2_depth.launch.py \
-    left_image_topic:=/camera0/infra1/image_rect_raw \
-    right_image_topic:=/camera0/infra2/image_rect_raw \
-    left_info_topic:=/camera0/infra1/camera_info \
-    right_info_topic:=/camera0/infra2/camera_info \
-    depth_image_topic:=/camera0/depth/image \
-    depth_info_topic:=/camera0/depth/camera_info
+ros2 run s2m2_ros2 stereo_depth_node --ros-args \
+    -r left/image_rect:=/camera0/infra1/image_rect_raw \
+    -r right/image_rect:=/camera0/infra2/image_rect_raw \
+    -r left/camera_info:=/camera0/infra1/camera_info \
+    -r right/camera_info:=/camera0/infra2/camera_info \
+    -r depth/image:=/camera0/depth/image \
+    -r depth/camera_info:=/camera0/depth/camera_info
 
 # terminal 3 — nvblox alone, with depth/color remapped to our outputs
 ros2 launch nvblox_examples_bringup nvblox.launch.py \

@@ -159,5 +159,5 @@ Done.
 
 Next steps:
   source $REPO_ROOT/ros2_ws/install/setup.bash
-  ros2 launch s2m2_ros2 s2m2_depth.launch.py
+  ros2 launch s2m2_ros2 s2m2_realsense_nvblox.launch.py
 EOF
