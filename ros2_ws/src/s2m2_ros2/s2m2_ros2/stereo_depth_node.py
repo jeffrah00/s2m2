@@ -6,6 +6,7 @@ the launch file to fit your pipeline.
 """
 
 import os
+import sys
 
 os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
 
@@ -22,6 +23,11 @@ from sensor_msgs.msg import CameraInfo, Image
 class StereoDepthNode(Node):
     def __init__(self):
         super().__init__("s2m2_stereo_depth_node")
+
+        ros_distro = os.environ.get("ROS_DISTRO", "<unknown>")
+        self.get_logger().info(
+            f"ROS_DISTRO={ros_distro}, python={sys.version.split()[0]}"
+        )
 
         self._declare_params()
         self._read_params()
@@ -109,6 +115,14 @@ class StereoDepthNode(Node):
                 f"depth_encoding must be 32FC1 or 16UC1, got {self.depth_encoding}"
             )
 
+    def _warn_throttled(self, msg: str, sec: float = 5.0) -> None:
+        # rclpy gained throttle_duration_sec on Logger.warn at different points
+        # across distros; fall back to an unthrottled warn if it's missing.
+        try:
+            self.get_logger().warn(msg, throttle_duration_sec=sec)
+        except TypeError:
+            self.get_logger().warn(msg)
+
     def _build_qos(self) -> QoSProfile:
         qos = QoSPresetProfiles.SENSOR_DATA.value
         if self.qos_reliability == "reliable":
@@ -179,10 +193,10 @@ class StereoDepthNode(Node):
 
     def _stereo_callback(self, left_msg: Image, right_msg: Image):
         if not self._calibration_ready():
-            self.get_logger().warn(
+            self._warn_throttled(
                 "Skipping frame: no calibration (fx and baseline). "
                 "Provide camera_info topics or fx_fallback / baseline_m_fallback params.",
-                throttle_duration_sec=5.0,
+                sec=5.0,
             )
             return
 

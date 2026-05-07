@@ -218,9 +218,10 @@ Supported TensorRT precisions: fp32, tf32, fp16
 
 ## 🤖 ROS2 Wrapper (for Isaac ROS Nvblox)
 
-An optional ROS2 (Jazzy) wrapper lives at `ros2_ws/src/s2m2_ros2/`. It
-subscribes to a rectified stereo pair and publishes a depth image plus
-`CameraInfo` in the format Isaac ROS Nvblox consumes.
+An optional ROS2 wrapper lives at `ros2_ws/src/s2m2_ros2/`. It subscribes to
+a rectified stereo pair and publishes a depth image plus `CameraInfo` in the
+format Isaac ROS Nvblox consumes. Tested on **Humble** (Ubuntu 22.04),
+**Jazzy** (Ubuntu 24.04), and **Kilted** (Ubuntu 24.04).
 
 ### Topics
 
@@ -242,15 +243,37 @@ to `[min_depth_m, max_depth_m]`.
 
 The wrapper is built with `colcon` (ament_python) and is *separate* from the
 `pip install -e .` step above, but the two must share the **same Python
-environment**. Install both, in this order:
+environment**.
+
+#### Auto-detect (recommended)
+
+`scripts/install.sh` reads `/etc/os-release`, picks the matching ROS2 distro,
+sources it, then runs both install steps:
 
 ```bash
-# 1. Install the s2m2 Python package (so `import s2m2` works)
-pip install -e .
+./scripts/install.sh
+source ros2_ws/install/setup.bash
+```
 
-# 2. Build the ROS2 wrapper (so `ros2 launch s2m2_ros2 ...` works)
+| Ubuntu | Default distro picked | Other supported |
+| --- | --- | --- |
+| 22.04 (Jammy) | Humble | — |
+| 24.04 (Noble) | Jazzy | Kilted (`./scripts/install.sh --distro kilted`) |
+
+Override the auto-detect with `--distro humble|jazzy|kilted`, or by exporting
+`ROS_DISTRO` before running. Use `--skip-pip` / `--skip-colcon` to do only
+half of the install.
+
+#### Manual install
+
+If you'd rather run the steps yourself, do them in this order in the same
+Python env:
+
+```bash
+source /opt/ros/<distro>/setup.bash      # humble, jazzy, or kilted
+pip install -e .                          # 1. installs the s2m2 Python package
 cd ros2_ws
-colcon build --packages-select s2m2_ros2 --symlink-install
+colcon build --packages-select s2m2_ros2 --symlink-install   # 2. builds the wrapper
 source install/setup.bash
 ```
 
