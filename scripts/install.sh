@@ -144,7 +144,10 @@ if [[ "$SKIP_COLCON" -eq 0 ]]; then
     echo "==> Building s2m2_ros2 with colcon"
     (
         cd "$REPO_ROOT/ros2_ws"
-        colcon build --packages-select s2m2_ros2 --symlink-install
+        # NOTE: --symlink-install is omitted on purpose. It triggers
+        # `python3 setup.py develop --editable ...`, which setuptools >= 80
+        # no longer accepts. Plain `colcon build` does a regular install.
+        colcon build --packages-select s2m2_ros2
     )
 else
     echo "==> Skipping colcon build (--skip-colcon)"
