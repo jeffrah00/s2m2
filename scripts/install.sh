@@ -116,7 +116,11 @@ EOF
     exit 1
 fi
 # shellcheck disable=SC1090
+# ROS setup files reference optional vars (AMENT_TRACE_SETUP_FILES, etc.)
+# without ${VAR:-} defaults, so relax `set -u` for the duration of the source.
+set +u
 source "$ROS_SETUP"
+set -u
 echo "==> Sourced $ROS_SETUP (ROS_DISTRO=$ROS_DISTRO)"
 
 # 3. Repo root (the parent of this script)
