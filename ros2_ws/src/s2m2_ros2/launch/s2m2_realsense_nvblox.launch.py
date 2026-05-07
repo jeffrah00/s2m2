@@ -94,6 +94,13 @@ def generate_launch_description() -> LaunchDescription:
         cli=True)
     # >>> s2m2: arg surface for the patched-in stereo depth node
     args.add_arg(
+        'depth_source',
+        's2m2',
+        choices=['s2m2', 'realsense'],
+        description="Depth source for nvblox. 's2m2' (default) overrides "
+                    "the splitter; 'realsense' falls back to upstream behaviour.",
+        cli=True)
+    args.add_arg(
         's2m2_params_file',
         lu.get_path('s2m2_ros2', 'config/s2m2_depth.yaml'),
         description='Parameter file for the s2m2 stereo_depth_node.',
@@ -205,7 +212,11 @@ def generate_launch_description() -> LaunchDescription:
     # SetRemap applies to all subsequent actions in this scope; the nvblox
     # include below is the only consumer of camera_0/depth/image, so this
     # cleanly diverts it to whatever s2m2 publishes on s2m2_depth_topic.
-    actions.append(SetRemap(src='camera_0/depth/image', dst=args.s2m2_depth_topic))
+    # Skipped when depth_source:=realsense → upstream wiring intact.
+    actions.append(SetRemap(
+        src='camera_0/depth/image',
+        dst=args.s2m2_depth_topic,
+        condition=IfCondition(lu.is_equal(args.depth_source, 's2m2'))))
     # <<< s2m2
 
     # Nvblox
@@ -222,7 +233,8 @@ def generate_launch_description() -> LaunchDescription:
 
     # >>> s2m2: spawn the stereo depth node, subscribed to the splitter's
     # emitter-off IR pair (CameraInfo comes from the realsense driver, since
-    # the splitter doesn't republish camera_info).
+    # the splitter doesn't republish camera_info). Skipped when
+    # depth_source:=realsense.
     actions.append(Node(
         package='s2m2_ros2',
         executable='stereo_depth_node',
@@ -237,6 +249,7 @@ def generate_launch_description() -> LaunchDescription:
             ('depth/image',       args.s2m2_depth_topic),
             ('depth/camera_info', args.s2m2_depth_info_topic),
         ],
+        condition=IfCondition(lu.is_equal(args.depth_source, 's2m2')),
     ))
     # <<< s2m2
 

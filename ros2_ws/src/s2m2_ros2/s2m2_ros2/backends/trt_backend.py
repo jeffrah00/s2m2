@@ -14,12 +14,16 @@ class TensorRTBackend:
     The engine must be produced ahead of time via demo/export_tensorrt.py and
     is fixed-shape: incoming images must already match the engine's HxW (after
     the same pad-to-32 that run_stereo_matching applies internally).
+
+    The ``engine_path`` may contain ``{w}``, ``{h}``, or ``{wxh}``
+    placeholders (e.g. ``/path/CH256NTR3_{wxh}_fp16.trt``). When a
+    placeholder is present, engine load is deferred until ``set_input_size``
+    is called by the node with the resolution detected from CameraInfo.
     """
 
-    def __init__(self, engine_path: str, device: str = "cuda:0"):
-        if not os.path.isfile(engine_path):
-            raise FileNotFoundError(f"TensorRT engine not found: {engine_path}")
+    _PLACEHOLDERS = ("{w}", "{h}", "{wxh}")
 
+    def __init__(self, engine_path: str, device: str = "cuda:0"):
         import tensorrt as trt
         import pycuda.autoinit  # noqa: F401  (initializes a CUDA context)
         import pycuda.driver as cuda
@@ -27,6 +31,24 @@ class TensorRTBackend:
         self._trt = trt
         self._cuda = cuda
         self.device = torch.device(device)
+        self._engine_path_template = engine_path
+        self._loaded = False
+        self.engine = None
+        self.context = None
+        self.engine_h = None
+        self.engine_w = None
+
+        if any(p in engine_path for p in self._PLACEHOLDERS):
+            # Deferred: wait for set_input_size().
+            return
+        self._load_engine(engine_path)
+
+    def _load_engine(self, engine_path: str):
+        if not os.path.isfile(engine_path):
+            raise FileNotFoundError(f"TensorRT engine not found: {engine_path}")
+
+        trt = self._trt
+        cuda = self._cuda
 
         logger = trt.Logger(trt.Logger.WARNING)
         with open(engine_path, "rb") as f, trt.Runtime(logger) as runtime:
@@ -66,9 +88,24 @@ class TensorRTBackend:
             self.context.set_tensor_address(name, int(dev))
 
         self.stream = cuda.Stream()
+        self._loaded = True
 
     def warmup(self, height: int, width: int):
         pass
+
+    def set_input_size(self, width: int, height: int):
+        # Called by the node when camera resolution becomes known.
+        # Resolve any {w}/{h}/{wxh} placeholders in the engine path and
+        # load the matching engine.
+        if self._loaded:
+            return
+        path = (
+            self._engine_path_template
+            .replace("{w}", str(width))
+            .replace("{h}", str(height))
+            .replace("{wxh}", f"{width}x{height}")
+        )
+        self._load_engine(path)
 
     def _check_shape(self, left_t: torch.Tensor):
         h, w = left_t.shape[-2:]

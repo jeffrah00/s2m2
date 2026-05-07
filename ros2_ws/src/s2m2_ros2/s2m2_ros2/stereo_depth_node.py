@@ -39,6 +39,7 @@ class StereoDepthNode(Node):
         self._fx = float(self.fx_fallback)
         self._baseline = float(self.baseline_m_fallback)
         self._warmed_up = False
+        self._resolution_known = False
 
         qos = self._build_qos()
 
@@ -161,6 +162,17 @@ class StereoDepthNode(Node):
         self._left_info = msg
         if msg.k[0] > 0.0:
             self._fx = float(msg.k[0])
+        if not self._resolution_known and msg.width > 0 and msg.height > 0:
+            self._resolution_known = True
+            self.get_logger().info(
+                f"auto-detected camera resolution: {msg.width}x{msg.height}"
+            )
+            try:
+                set_size = getattr(self.backend, "set_input_size", None)
+                if callable(set_size):
+                    set_size(int(msg.width), int(msg.height))
+            except Exception as e:
+                self.get_logger().error(f"backend.set_input_size failed: {e}")
 
     def _right_info_cb(self, msg: CameraInfo):
         self._right_info = msg
@@ -183,11 +195,11 @@ class StereoDepthNode(Node):
             cv_img = self.bridge.imgmsg_to_cv2(
                 img_msg, desired_encoding="rgb8"
             )
-        # crop to multiples of 32 (mirror demo/visualize_2d_simple.py:55-62)
-        h, w = cv_img.shape[:2]
-        h32 = (h // 32) * 32
-        w32 = (w // 32) * 32
-        cv_img = cv_img[:h32, :w32]
+        # s2m2's run_stereo_matching pads to a multiple of 32 internally and
+        # crops the disparity back to the input H/W; the TRT backend does the
+        # same in its own infer(). Pass the camera's native size through so
+        # downstream nvblox sees depth at the same dims as the IR/color
+        # streams (no FoV loss for non-32-multiple profiles like 848x480).
         t = torch.from_numpy(cv_img).permute(2, 0, 1).unsqueeze(0).float()
         return t.to(self.backend.device)
 

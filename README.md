@@ -307,12 +307,12 @@ Tune behaviour through `ros2_ws/src/s2m2_ros2/config/s2m2_depth.yaml`
 
 | param | default | meaning |
 | --- | --- | --- |
-| `model_type` | `L` | one of `S`, `M`, `L`, `XL` |
+| `model_type` | `S` | one of `S`, `M`, `L`, `XL` (lightest → heaviest). See "Choosing the s2m2 model size" below. |
 | `weights_dir` | `weights/pretrain_weights` | directory containing `CH*NTR*.pth` |
 | `refine_iter` | `3` | s2m2 iterative refinement passes |
 | `allow_negative_disparity` | `false` | flips s2m2's `use_positivity` flag |
 | `backend` | `pytorch` | or `tensorrt` |
-| `trt_engine_path` | `""` | required when `backend=tensorrt` |
+| `trt_engine_path` | `""` | required when `backend=tensorrt`. Supports `{w}`/`{h}`/`{wxh}` placeholders, resolved from the first CameraInfo. |
 | `device` | `cuda:0` | torch device |
 | `depth_encoding` | `32FC1` | or `16UC1` (millimeters) |
 | `min_depth_m` / `max_depth_m` | `0.2` / `20.0` | clamp range; outside → 0 |
@@ -321,6 +321,61 @@ Tune behaviour through `ros2_ws/src/s2m2_ros2/config/s2m2_depth.yaml`
 | `fx_fallback`, `baseline_m_fallback` | `0.0` | used only if `camera_info` topics never arrive |
 | `sync_slop_s` | `0.05` | `ApproximateTimeSynchronizer` tolerance |
 | `qos_reliability` | `reliable` | or `best_effort` |
+
+#### Choosing the s2m2 model size
+
+The default is `S` (lightest, fastest); higher tiers trade speed for
+quality:
+
+| `model_type` | feature channels | refinement transformers | trade-off |
+| --- | --- | --- | --- |
+| `S` | 128 | 1 | fastest, lowest VRAM (default) |
+| `M` | 192 | 2 | balanced |
+| `L` | 256 | 3 | higher quality |
+| `XL` | 384 | 3 | best quality, slowest |
+
+Three ways to override the default:
+
+1. **Via the bundled launch** — point `s2m2_params_file` at your own YAML:
+   ```bash
+   ros2 launch s2m2_ros2 s2m2_realsense_nvblox.launch.py \
+       s2m2_params_file:=/abs/path/to/my_params.yaml
+   ```
+   ```yaml
+   # my_params.yaml
+   s2m2_stereo_depth_node:
+     ros__parameters:
+       model_type: "L"   # or M / XL
+   ```
+2. **Via CLI param override** when launching the node directly:
+   ```bash
+   ros2 run s2m2_ros2 stereo_depth_node --ros-args -p model_type:=L
+   ```
+3. **By editing the shipped default** at
+   `ros2_ws/src/s2m2_ros2/config/s2m2_depth.yaml` and rebuilding with
+   `colcon build --packages-select s2m2_ros2`.
+
+#### Camera resolution handling
+
+The node auto-detects width and height from the first `CameraInfo` it
+receives and logs `auto-detected camera resolution: <W>x<H>`. That
+detection is used for two things:
+
+- **Eager warmup** — the PyTorch backend runs a single warmup forward
+  pass at the detected resolution before the first stereo image arrives,
+  so first-frame latency stays low.
+- **TensorRT engine selection** — if `trt_engine_path` contains `{w}`,
+  `{h}`, or `{wxh}`, the placeholders are substituted and the matching
+  engine is loaded on the first CameraInfo. Example:
+  `trt_engine_path: '/abs/path/CH128NTR1_{wxh}_fp16.trt'` resolves to
+  `/abs/path/CH128NTR1_848x480_fp16.trt` on a D435i at 848×480.
+
+The node accepts **any** image dimensions — RealSense profiles like
+848×480, 1280×720, and 1920×1080 are not divisible by 32, but s2m2's
+internal `image_pad`/`image_crop` round-trip handles that natively, so
+depth is published at the camera's native dimensions with K from
+CameraInfo unchanged. Nvblox sees depth and color at the same size,
+which keeps voxel coverage maximal.
 
 ### TensorRT backend
 
@@ -376,15 +431,21 @@ and nvblox subscribed to:
 **vendored copy** of `nvblox_examples_bringup/launch/realsense_example.launch.py`
 (pinned to `NVIDIA-ISAAC-ROS/isaac_ros_nvblox` branch
 [`release-4.3`](https://github.com/NVIDIA-ISAAC-ROS/isaac_ros_nvblox/tree/release-4.3))
-with three small additions, each fenced by `# >>> s2m2:` … `# <<< s2m2`
+with a few small additions, each fenced by `# >>> s2m2:` … `# <<< s2m2`
 markers:
 
-1. three new launch args (`s2m2_params_file`, `s2m2_depth_topic`,
-   `s2m2_depth_info_topic`),
-2. a `SetRemap` that diverts nvblox's `camera_0/depth/image` subscription
-   to the s2m2 depth topic, and
-3. a `Node(...)` for `s2m2_stereo_depth_node`, subscribed to the
+1. four new launch args (`depth_source`, `s2m2_params_file`,
+   `s2m2_depth_topic`, `s2m2_depth_info_topic`),
+2. a `SetRemap` (gated on `depth_source==s2m2`) that diverts nvblox's
+   `camera_0/depth/image` subscription to the s2m2 depth topic, and
+3. a `Node(...)` (also gated on `depth_source==s2m2`) for
+   `s2m2_stereo_depth_node`, subscribed to the
    `realsense_splitter_node`'s emitter-off IR pair.
+
+`depth_source` defaults to `s2m2`, so a bare
+`ros2 launch s2m2_ros2 s2m2_realsense_nvblox.launch.py` already runs
+nvblox on s2m2 depth. Pass `depth_source:=realsense` to skip s2m2 and
+fall back to the splitter-driven depth instead.
 
 Run it with:
 
@@ -410,6 +471,7 @@ vendored upstream file — `mode`, `num_cameras`, `run_realsense`,
 | `s2m2_params_file` | `<share>/s2m2_ros2/config/s2m2_depth.yaml` | s2m2 node parameters |
 | `s2m2_depth_topic` | `/camera0/s2m2/depth/image` | where s2m2 publishes; nvblox is remapped to subscribe here |
 | `s2m2_depth_info_topic` | `/camera0/depth/camera_info` | CameraInfo for the s2m2 depth output |
+| `depth_source` | `s2m2` | `s2m2` (default) routes nvblox to s2m2 depth and spawns the s2m2 node; `realsense` skips both and falls back to the upstream splitter-driven depth |
 
 To re-vendor against a newer Isaac ROS release, refetch
 `nvblox_examples_bringup/launch/realsense_example.launch.py` from the

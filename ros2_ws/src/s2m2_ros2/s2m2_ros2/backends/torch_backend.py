@@ -38,6 +38,12 @@ class TorchBackend:
         dummy = torch.zeros(1, 3, h, w, device=self.device, dtype=torch.float32)
         run_stereo_matching(self.model, dummy, dummy, self.device, N_repeat=1)
 
+    def set_input_size(self, width: int, height: int):
+        # Called by the node once camera resolution is known (from CameraInfo).
+        # Run an eager warmup at that resolution so the first real frame
+        # doesn't pay the JIT/compile cost.
+        self.warmup(height, width)
+
     def infer(self, left_t: torch.Tensor, right_t: torch.Tensor):
         pred_disp, _pred_occ, pred_conf, _avg_conf, _ms = run_stereo_matching(
             self.model, left_t, right_t, self.device, N_repeat=1

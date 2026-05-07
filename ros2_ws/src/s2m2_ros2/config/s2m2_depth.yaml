@@ -1,10 +1,15 @@
 s2m2_stereo_depth_node:
   ros__parameters:
-    model_type: "L"
+    # one of S, M, L, XL (lightest -> heaviest). S is fastest; L/XL are
+    # higher quality at proportionally higher GPU/inference cost.
+    model_type: "S"
     weights_dir: "weights/pretrain_weights"
     refine_iter: 3
     allow_negative_disparity: false
     backend: "pytorch"
+    # TensorRT engine path (used when backend: "tensorrt"). Supports
+    # {w} / {h} / {wxh} placeholders that the node resolves from the
+    # first received CameraInfo, e.g. "/path/CH128NTR1_{wxh}_fp16.trt".
     trt_engine_path: ""
     device: "cuda:0"
     depth_encoding: "32FC1"
