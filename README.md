@@ -368,10 +368,40 @@ and nvblox subscribed to:
 | `camera_0/color/image` | `/camera0/color/image_raw` |
 | `camera_0/color/camera_info` | `/camera0/color/camera_info` |
 
-To swap in s2m2 depth, run the RealSense driver with the IR emitter **off**
-(its dot pattern contaminates the IR images that s2m2 consumes), point
-s2m2 at the rectified IR pair, and remap nvblox's depth subscription to
-s2m2's output.
+We don't reuse `realsense_example.launch.py` directly because it
+hard-codes the splitter as nvblox's depth publisher and exposes no
+launch arg to swap that out — two publishers on `/camera_0/depth/image`
+would fight, and the IR emitter would still be on (its dot pattern
+contaminates the IR images s2m2 consumes).
+
+##### One-shot launch (recommended)
+
+`s2m2_ros2` ships a bundled launch file that brings up the RealSense
+driver (IR emitter off), s2m2 wired to the rectified IR pair, and nvblox
+with depth/color remapped to our outputs:
+
+```bash
+ros2 launch s2m2_ros2 s2m2_realsense_nvblox.launch.py
+```
+
+Useful overrides:
+
+| arg | default | purpose |
+| --- | --- | --- |
+| `launch_realsense` | `true` | set `false` if you already have a RealSense driver running |
+| `launch_nvblox` | `true` | set `false` to start nvblox separately |
+| `camera_namespace` | `camera0` | RealSense topic namespace |
+| `image_profile` | `640x480x30` | RealSense IR/depth profile (`WxHxFPS`) |
+| `nvblox_launch_pkg` / `nvblox_launch_file` | `nvblox_examples_bringup` / `launch/perception/nvblox.launch.py` | override if your nvblox release puts the launch file elsewhere |
+
+The bundled launch uses `SetRemap` to override nvblox's internal depth and
+color subscriptions, so the same `nvblox.launch.py` from
+`nvblox_examples_bringup` works without modification.
+
+##### Manual three-terminal version
+
+If you'd rather run each component yourself (e.g. you already have a
+RealSense bringup file):
 
 ```bash
 # terminal 1 — RealSense driver only (no splitter, IR emitter disabled)
@@ -384,7 +414,7 @@ ros2 launch realsense2_camera rs_launch.py \
     depth_module.profile:=640x480x30
 
 # terminal 2 — s2m2 stereo depth from the RealSense IR pair,
-# publishing to /camera0/depth/image (the namespace nvblox already wants)
+# publishing to /camera0/depth/image
 ros2 launch s2m2_ros2 s2m2_depth.launch.py \
     left_image_topic:=/camera0/infra1/image_rect_raw \
     right_image_topic:=/camera0/infra2/image_rect_raw \
@@ -393,8 +423,7 @@ ros2 launch s2m2_ros2 s2m2_depth.launch.py \
     depth_image_topic:=/camera0/depth/image \
     depth_info_topic:=/camera0/depth/camera_info
 
-# terminal 3 — nvblox alone (skip realsense_example.launch.py so the splitter
-# doesn't also write to /camera_0/depth/image). Remap inputs to match.
+# terminal 3 — nvblox alone, with depth/color remapped to our outputs
 ros2 launch nvblox_examples_bringup nvblox.launch.py \
     --ros-args \
         -r camera_0/depth/image:=/camera0/depth/image \
@@ -403,16 +432,12 @@ ros2 launch nvblox_examples_bringup nvblox.launch.py \
         -r camera_0/color/camera_info:=/camera0/color/camera_info
 ```
 
-Why we don't reuse `realsense_example.launch.py` directly: it always wires
-nvblox to `/camera0/realsense_splitter_node/output/depth`, so two
-publishers (the splitter and us) would fight for the same topic. Bringing
-up `nvblox.launch.py` standalone with the four `--ros-args -r` remaps gives
-us the same nvblox configuration without the splitter.
+##### Verifying the pipeline
 
-Verify with `rqt_graph` — `s2m2_stereo_depth_node` should be the only
-publisher on `/camera0/depth/image`, and `nvblox_node` should be its
-subscriber. RViz: visualize `/nvblox_node/mesh` (or `/nvblox_node/esdf_pointcloud`)
-to confirm the volumetric reconstruction is being driven by s2m2 depth.
+`rqt_graph` should show `s2m2_stereo_depth_node` as the only publisher on
+`/camera0/depth/image` and `nvblox_node` as its subscriber. In RViz,
+visualize `/nvblox_node/mesh` (or `/nvblox_node/esdf_pointcloud`) to
+confirm the reconstruction is being driven by s2m2 depth.
 
 A few RealSense-specific notes:
 - s2m2 expects RGB inputs (3 channels). The node automatically replicates
