@@ -133,8 +133,8 @@ fi
 
 # 4. pip install s2m2
 if [[ "$SKIP_PIP" -eq 0 ]]; then
-    echo "==> Installing s2m2 Python package (pip install -e .)"
-    pip install -e "$REPO_ROOT"
+    echo "==> Installing s2m2 Python package (pip install -e . --break-system-packages)"
+    pip install --break-system-packages -e "$REPO_ROOT"
 else
     echo "==> Skipping pip install (--skip-pip)"
 fi
